@@ -1,0 +1,53 @@
+# Script to calculate the themal conductivity of bulk silicon
+# LAMMPS input script for thermal conductance between silicon interfaces at 300 K
+
+# Initialization
+units       metal              # Metal units (appropriate for silicon)
+dimension   3                  # 3D simulation
+boundary    p p p              # Periodic boundary conditions in all directions
+atom_style  atomic             # Atomic style for classical simulation
+
+# Create simulation box and atoms
+lattice     diamond 5.43       # Diamond lattice structure for Silicon (Si)
+region      box block 0 10 0 10 0 10  # Create a box of size 10x10x10
+create_box  2 box              # Create simulation box for 2 atom types (Si)
+create_atoms 1 box             # Create atoms of type 1 in the box
+
+# Define mass for silicon atoms
+mass        1 28.085           # Atomic mass of silicon (Si) in atomic mass units
+
+# Define pair potential (Stillinger-Weber potential for silicon)
+pair_style   sw                # Stillinger-Weber potential
+pair_coeff   * * Si.sw Si Si   # Use the silicon SW potential file (you'll need Si.sw file)
+
+# Set up initial velocities at 300K (target temperature)
+velocity    all create 300.0 12345  # Create velocities at 300 K with a random seed
+
+# Fixes and Thermostat
+fix         1 all nvt temp 300.0 300.0 100.0  # NVT ensemble to control temperature at 300 K
+fix         2 all ave/time 100 10 1000 c_v  # Compute the specific heat and store it
+
+# Define thermodynamic output
+thermo      100                 # Output thermodynamic data every 100 steps
+thermo_style custom step temp etotal pe ke press vol lx ly lz # Customize output
+thermo_modify flush yes        # Flush the output to screen
+
+# Set up the simulation to run for 100,000 timesteps (for thermal equilibration)
+timestep    0.001               # Time step size (in picoseconds)
+run         100000              # Number of timesteps
+
+# Compute heat flux using the Green-Kubo method (for thermal conductance)
+compute     heat_flux all heat/flux  # Compute the heat flux using Green-Kubo
+compute      ke all ke/atom         # Kinetic energy per atom
+
+# Output the heat flux and other related quantities
+fix         3 all ave/time 100 10 1000 c_ke[1] c_ke[2] c_ke[3] c_v  # Average heat flux and temperature
+fix_modify  3 energy yes
+
+# Run the simulation for heat transfer calculation
+run         50000  # Number of timesteps for heat transfer simulation
+
+# Post-processing
+# After the simulation, the heat flux data can be analyzed from the output files.
+
+# End of LAMMPS input file

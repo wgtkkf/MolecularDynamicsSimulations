@@ -1,0 +1,39 @@
+LAMMPS (29 Sep 2021 - Update 2)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+# LAMMPS input script for thermal conductance between gold interfaces at 300 K
+
+# Initialization
+units       metal              # Use metal units (appropriate for metallic systems)
+dimension   3                  # 3D simulation
+boundary    p p p              # Periodic boundary conditions in all directions
+atom_style  atomic             # Atomic style for classical simulation
+
+# Create simulation box and atoms
+lattice     fcc 4.08           # FCC lattice structure for Gold (Au) with a lattice constant of 4.08 Å
+Lattice spacing in x,y,z = 4.0800000 4.0800000 4.0800000
+region      box block 0 10 0 10 0 10  # Create a box of size 10x10x10 (in lattice units)
+create_box  1 box              # Create simulation box for 1 atom type (Au)
+Created orthogonal box = (0.0000000 0.0000000 0.0000000) to (40.800000 40.800000 40.800000)
+  1 by 1 by 1 MPI processor grid
+create_atoms 1 box             # Create atoms of type 1 in the box (Gold atoms)
+Created 4000 atoms
+  using lattice units in orthogonal box = (0.0000000 0.0000000 0.0000000) to (40.800000 40.800000 40.800000)
+  create_atoms CPU = 0.000 seconds
+
+# Define pair potential (EAM potential for gold)
+pair_style  eam                 # EAM potential
+pair_coeff  * * Au_u3.eam      # Use the EAM potential file for gold (Au_u3.eam)
+Reading eam potential file Au_u3.eam with DATE: 2007-06-11
+
+# Define mass for gold atoms
+mass        1 196.97            # Atomic mass of gold (Au) in atomic mass units
+
+# Set up initial velocities at 300K (target temperature)
+velocity    all create 300.0 12345  # Create velocities at 300 K with a random seed
+
+# Fixes and Thermostat
+fix         1 all nvt temp 300.0 300.0 100.0  # NVT ensemble to control temperature at 300 K
+fix         2 all ave/time 100 10 1000 c_v  # Compute the specific heat and store it
+ERROR: Compute ID for fix ave/time does not exist (src/fix_ave_time.cpp:138)
+Last command: fix         2 all ave/time 100 10 1000 c_v  # Compute the specific heat and store it

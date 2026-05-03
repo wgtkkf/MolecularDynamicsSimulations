@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------------
+# LAMMPS Input File: Thermal Conductance Across a Vacuum Gap
+# -----------------------------------------------------------------------------
+
+# --- 1. USER INPUT VARIABLES ---
+variable        G_SIZE equal 5.0            
+variable        T_HOT equal 305.0           
+variable        T_COLD equal 300.0         
+variable        MAT_SETUP string "Si_Si"    
+variable        POT_FILE string "Si.sw"     
+
+# --- 2. Initialization ---
+units           metal
+dimension       3
+boundary        p p p
+atom_style      atomic
+
+# --- 3. Material Logic ---
+if "${MAT_SETUP} == Si_Si" then &
+  "variable LATTICE_TYPE string diamond" &
+  "variable LATTICE_CONST equal 5.431" &
+  "variable M1 equal 28.0855" &
+  "variable M2 equal 28.0855"
+if "${MAT_SETUP} == Au_Au" then &
+  "variable LATTICE_TYPE string fcc" &
+  "variable LATTICE_CONST equal 4.08" &
+  "variable M1 equal 196.9665" &
+  "variable M2 equal 196.9665"
+if "${MAT_SETUP} == Si_Pt" then &
+  "variable LATTICE_TYPE string fcc" &
+  "variable LATTICE_CONST equal 4.5" &
+  "variable M1 equal 28.0855" &
+  "variable M2 equal 195.084"
+
+# --- 4. Structure Generation ---
+lattice         ${LATTICE_TYPE} ${LATTICE_CONST}
+
+variable        z2_start equal 40.0+(${G_SIZE}/${LATTICE_CONST})
+variable        z2_end   equal ${z2_start}+40.0
+variable        z_total  equal ${z2_end}
+
+region          sim_box block 0 10 0 10 0 ${z_total}
+create_box      2 sim_box
+
+region          reg_left  block 0 10 0 10 0 40.0
+region          reg_right block 0 10 0 10 ${z2_start} ${z2_end}
+
+create_atoms    1 region reg_left
+create_atoms    2 region reg_right
+
+mass            1 ${M1}
+mass            2 ${M2}
+
+group           left_block  type 1
+group           right_block type 2
+group           all_atoms   union left_block right_block
+
+variable        Lz_solid equal 40.0*${LATTICE_CONST}
+variable        Lz_final equal ${z_total}*${LATTICE_CONST}
+
+# --- 5. Potential Definition ---
+if "${LATTICE_TYPE} == diamond" then &
+  "pair_style sw" &
+  "pair_coeff * * ${POT_FILE} Si Si"
+if "${MAT_SETUP} == Au_Au" then &
+  "pair_style eam/alloy" &
+  "pair_coeff * * ${POT_FILE} Au Au"
+if "${MAT_SETUP} == Si_Pt" then &
+  "pair_style eam/alloy" &
+  "pair_coeff * * ${POT_FILE} Si Pt"
+
+# --- 6. Energy Minimization (CRITICAL STEP) ---
+print "Starting Energy Minimization..."
+minimize        1.0e-6 1.0e-8 1000 10000
+reset_timestep  0
+
+write_data initial_structure.lammpsdata
+
+# --- 7. NEMD Setup ---
+variable        t_thick equal 2.0*${LATTICE_CONST}
+variable        z_hot_start equal ${Lz_final}-${t_thick}
+variable        z_cold_end  equal ${t_thick}
+
+region          hot_thermo_region block INF INF INF INF ${z_hot_start} ${Lz_final} units box
+group           hot_thermo_group region hot_thermo_region
+region          cold_thermo_region block INF INF INF INF 0.0 ${z_cold_end} units box
+group           cold_thermo_group region cold_thermo_region
+group           bulk_atoms subtract all_atoms hot_thermo_group cold_thermo_group
+
+# --- 8. Relaxation (Equilibration) ---
+print "Starting Relaxation at 300K..."
+timestep        0.001
+velocity        all_atoms create 300.0 45678 mom yes rot yes dist gaussian
+fix             1 all_atoms nvt temp 300.0 300.0 0.1
+run             20000 
+unfix           1
+
+# --- 9. Production NEMD ---
+fix             NVE bulk_atoms nve
+fix             Hot_T hot_thermo_group langevin ${T_HOT} ${T_HOT} 0.1 8976
+fix             Cold_T cold_thermo_group langevin ${T_COLD} ${T_COLD} 0.1 2345
+
+compute         layers all_atoms chunk/atom bin/1d z lower 1.0 units box
+fix             profile all_atoms ave/chunk 10 1000 10000 layers temp file temp_profile.dat
+
+thermo_style    custom step temp epair etotal press f_Hot_T f_Cold_T
+thermo          10000
+run             400000

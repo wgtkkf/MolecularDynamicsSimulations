@@ -1,0 +1,117 @@
+# -----------------------------------------------------------------------------
+# LAMMPS Input File: Silicon-Platinum (Si-Pt) Interfacial Thermal Conductance (ITC)
+# Method: Direct NEMD via Temperature Gradient (Langevin Thermostats)
+# -----------------------------------------------------------------------------
+
+# --- User-Defined Variables ---
+# Set the temperature for the Silicon (Hot) side. Change this for your two scenarios.
+variable                T_HOT_SIDE equal 305.0    # Use 305.0 or 470.0 (K)
+variable                T_COLD_SIDE equal 300.0 # Platinum (K)
+
+# --- 1. Initialization and System Definition ---
+units                      metal                      # eV, Angstrom, ps, bar
+dimension              3
+boundary                p p p                      # Periodic in all directions
+atom_style            atomic
+
+# --- 2. Structure Generation and Interface Creation ---
+
+# NOTE: Si (a=5.43A, Diamond) and Pt (a=3.92A, FCC) have severe lattice mismatch.
+# For a TEMPLATE, we assume a compromise lattice constant (e.g., 4.5A) and rely on NPT 
+# to relax the extreme strain, but a complex supercell is ideal for real research.
+lattice                  fcc 4.5                  # Compromise lattice constant
+region                    box block 0 10 0 10 0 80    # Elongated in Z for heat flow
+create_box            2 box                                          # 2 atom types
+
+# Create Silicon in the first half (Z<40)
+region                    si_block block INF INF INF INF 0 40
+create_atoms        1 region si_block
+group                      si_atoms region si_block
+
+# Two atom types: 1 = Si (Hot), 2 = Pt (Cold)
+mass                        1 28.0855              # Silicon mass
+mass                        2 195.084              # Platinum mass
+
+# Create Platinum in the second half (Z>40)
+region                    pt_block block INF INF INF INF 40 INF
+create_atoms        2 region pt_block
+group                      pt_atoms region pt_block
+
+# Define all atoms and the bulk region
+group                      all_atoms union si_atoms pt_atoms
+
+# --- 3. Potential Definition (Ternary EAM) ---
+pair_style            eam/alloy
+# IMPORTANT: Use a DUAL-ELEMENT (Si-Pt) EAM potential file here.
+# You must source this file from a reliable database or publication.
+pair_coeff            * * SiPt.eam.alloy Si Pt
+
+# --- 4. Minimization and Equilibration ---
+
+# Structural Relaxation Phase 1 (Minimization)
+print "Starting Energy Minimization..."
+minimize                1.0e-6 1.0e-8 1000 10000
+reset_timestep    0
+
+# Structural Relaxation Phase 2 (NPT Equilibration)
+timestep                0.001                      # 1 fs step
+# Set initial velocities based on the average temperature (approx 302.5K)
+velocity                all_atoms create 302.5 45678 mom yes rot yes dist gaussian
+
+print "Starting NPT Equilibration at 300K..."
+fix                          NPT_Equil all_atoms npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run                          20000                      # 20 ps to relax stress from interface
+unfix                      NPT_Equil
+
+# --- 5. NEMD Setup (Defining Thermostat Regions) ---
+
+# The interface is at the Z-boundary between the Si (hot) and Pt (cold) blocks.
+# Thermostat regions are 2 lattice cells thick, placed away from the interface.
+
+# Hot Thermostat Region (on the Si side, Z < 40)
+region                    hot_thermo_region block INF INF INF INF 18 20
+group                      hot_thermo_group region hot_thermo_region
+
+# Cold Thermostat Region (on the Pt side, Z > 40)
+region                    cold_thermo_region block INF INF INF INF 58 60
+group                      cold_thermo_group region cold_thermo_region
+
+# The remaining atoms (the bulk and interface)
+group                      bulk_atoms subtract all_atoms hot_thermo_group cold_thermo_group
+
+# --- 6. Applying Temperature Gradient (NEMD Run) ---
+# NVE integration for the bulk atoms
+fix                          NVE bulk_atoms nve
+
+# Apply the fixed temperatures using Langevin thermostats
+# Si (Hot side) - uses the user-defined T_HOT_SIDE variable
+fix                          Hot_T    hot_thermo_group    langevin ${T_HOT_SIDE} ${T_HOT_SIDE} 0.1 8976
+# Pt (Cold side) - fixed at 300 K
+fix                          Cold_T cold_thermo_group langevin ${T_COLD_SIDE} ${T_COLD_SIDE} 0.1 2345
+
+# Critical for Flux calculation: Enable tracking of energy added/removed by the thermostats
+fix_modify            Hot_T energy yes
+fix_modify            Cold_T energy yes
+
+# Track the cumulative energy added/removed by the fixes
+variable                E_hot_cum equal f_Hot_T
+variable                E_cold_cum equal f_Cold_T
+
+# --- 7. Measurement and Output ---
+
+# Compute instantaneous temperature for spatial binning
+compute                  ke all_atoms ke/atom
+variable                temp atom c_ke/(1.5*8.617e-5) # kT to T conversion (kB in eV/K)
+
+# Bin the system along Z
+compute                  layers all_atoms chunk/atom bin/1d z 1.0 units box
+fix                          profile all_atoms ave/chunk 10 10000 100000 layers v_temp file temp_profile.dat
+
+# Output thermodynamic data and the cumulative energies for flux calculation
+thermo_style        custom step temp etotal press v_E_hot_cum v_E_cold_cum
+thermo                    10000 # Output every 10 ps
+
+print "Starting NEMD Run for Si-Pt Thermal Conductance (T_HOT=${T_HOT_SIDE} K)..."
+run                          200000    # 200 ps sampling
+
+print "NEMD Simulation Complete. Analyze temp_profile.dat and log.lammps."

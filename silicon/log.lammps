@@ -1,0 +1,177 @@
+LAMMPS (29 Sep 2021 - Update 2)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+# -----------------------------------------------------------------------------
+# LAMMPS Input File: Si Interfacial Thermal Conductance (ITC)
+# Method: Direct NEMD via Temperature Gradient (Langevin Thermostats)
+# Interface: Sigma 5 Twist Grain Boundary
+# -----------------------------------------------------------------------------
+
+## 1. Initialization
+units        metal              # eV, Angstrom, ps, bar
+dimension    3
+boundary     p p p              # Periodic in all directions
+atom_style   atomic
+
+# --- 2. Structure Generation (<100> Orientation) ---
+lattice      diamond 5.431      # Si Lattice Parameter
+Lattice spacing in x,y,z = 5.4310000 5.4310000 5.4310000
+region       box block 0 10 0 10 0 80 # Elongated in Z for heat flow (Lx=10, Ly=10, Lz=80)
+create_box   1 box
+Created orthogonal box = (0.0000000 0.0000000 0.0000000) to (54.310000 54.310000 434.48000)
+  1 by 1 by 8 MPI processor grid
+create_atoms 1 box
+Created 64000 atoms
+  using lattice units in orthogonal box = (0.0000000 0.0000000 0.0000000) to (54.310000 54.310000 434.48000)
+  create_atoms CPU = 0.001 seconds
+mass         1 28.0855
+
+# --- CREATE INTERFACE (Sigma 5 Twist Grain Boundary) ---
+# Creates a grain boundary by rotating the right half of the crystal
+region           right_half block INF INF INF INF 40 INF
+group            right_atoms region right_half
+32000 atoms in group right_atoms
+#displace_atoms   right_atoms rotate 5 5 40 0 0 1 36.87 # Twist around Z-axis (36.87 deg for Sigma 5)
+displace_atoms   right_atoms rotate 5 5 40 0 0 1 0 # bulk thermal conductance
+Displacing atoms ...
+
+# --- INSERT FOR VISUALIZATION ---
+write_data initial_structure.lammpsdata
+System init for write_data ...
+WARNING: Communication cutoff is 0.0. No ghost atoms will be generated. Atoms may get lost. (src/comm_brick.cpp:209)
+# --------------------------------
+
+## 3. Potential Definition
+pair_style   sw
+pair_coeff   * * Si.sw Si       # Requires Si.sw file
+Reading sw potential file Si.sw with DATE: 2007-06-11
+
+# --- 4. Minimization (Structural Relaxation Phase 1) ---
+print "Starting Energy Minimization..."
+Starting Energy Minimization...
+minimize     1.0e-6 1.0e-8 1000 10000
+WARNING: Using 'neigh_modify every 1 delay 0 check yes' setting during minimization (src/min.cpp:188)
+Neighbor list info ...
+  update every 1 steps, delay 0 steps, check yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 5.77118
+  ghost atom cutoff = 5.77118
+  binsize = 2.88559, bins = 19 19 151
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair sw, perpetual
+      attributes: full, newton on
+      pair build: full/bin/atomonly
+      stencil: full/bin/3d
+      bin: standard
+Per MPI rank memory allocation (min/avg/max) = 5.310 | 5.311 | 5.312 Mbytes
+Step Temp E_pair E_mol TotEng Press 
+       0            0    -277542.4            0    -277542.4   -28.135347 
+       1            0    -277542.4            0    -277542.4   -28.135347 
+Loop time of 0.00753315 on 8 procs for 1 steps with 64000 atoms
+
+99.0% CPU use with 8 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+     -277542.399682543  -277542.399682543  -277542.399682543
+  Force two-norm initial, final = 6.2410992e-11 6.2323906e-11
+  Force max component initial, final = 5.3895109e-13 5.4186937e-13
+  Final line search alpha, max atom move = 1.0000000 5.4186937e-13
+  Iterations, force evaluations = 1 2
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.0069954  | 0.0070263  | 0.0070472  |   0.0 | 93.27
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0.00013226 | 0.00015708 | 0.00018599 |   0.0 |  2.09
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 0.0003498  |            |       |  4.64
+
+Nlocal:        8000.00 ave        8000 max        8000 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+Nghost:        6725.00 ave        6725 max        6725 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+Neighs:         0.00000 ave           0 max           0 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+FullNghs:      272000.0 ave      272000 max      272000 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 2176000
+Ave neighs/atom = 34.000000
+Neighbor list builds = 0
+Dangerous builds = 0
+reset_timestep 0
+
+# --- 5. Equilibration (Structural Relaxation Phase 2) ---
+timestep     0.001              # 1 fs step
+velocity     all create 300.0 12345 mom yes rot yes dist gaussian
+
+# NPT to allow stress relaxation and volume/pressure stabilization at 300K
+print "Starting NPT Equilibration at 300K..."
+Starting NPT Equilibration at 300K...
+fix          1 all npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run          20000              # 20 ps equilibration
+Per MPI rank memory allocation (min/avg/max) = 4.185 | 4.186 | 4.187 Mbytes
+Step Temp E_pair E_mol TotEng Press Volume 
+       0          300    -277542.4            0   -275060.64    2040.3325    1281531.8 
+   20000    299.39248   -275034.93            0    -272558.2     115.9353    1285904.1 
+Loop time of 136.357 on 8 procs for 20000 steps with 64000 atoms
+
+Performance: 12.673 ns/day, 1.894 hours/ns, 146.674 timesteps/s
+99.7% CPU use with 8 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 125.74     | 126.39     | 126.7      |   2.6 | 92.69
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 3.4881     | 3.9748     | 4.5862     |  17.3 |  2.91
+Output  | 4.5183e-05 | 4.8025e-05 | 5.9575e-05 |   0.0 |  0.00
+Modify  | 4.8196     | 5.2797     | 5.7266     |  13.0 |  3.87
+Other   |            | 0.7084     |            |       |  0.52
+
+Nlocal:        8000.00 ave        8000 max        8000 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+Nghost:        6725.00 ave        6725 max        6725 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+Neighs:         0.00000 ave           0 max           0 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+FullNghs:      272000.0 ave      272000 max      272000 min
+Histogram: 8 0 0 0 0 0 0 0 0 0
+
+Total # of neighbors = 2176000
+Ave neighs/atom = 34.000000
+Neighbor list builds = 0
+Dangerous builds = 0
+unfix        1
+
+# --- 6. NEMD Setup (Defining Hot/Cold Regions) ---
+
+# Interface is at Z=40. Hot/Cold regions are placed away from the interface.
+# Regions are 2 Angstrom thick.
+region       hot_region  block INF INF INF INF 18 20
+region       cold_region block INF INF INF INF 58 60
+
+group        hot_group   region hot_region
+1601 atoms in group hot_group
+group        cold_group  region cold_region
+1597 atoms in group cold_group
+group        middle_atoms subtract all hot_group cold_group # The bulk and interface atoms
+60802 atoms in group middle_atoms
+
+# --- 7. Applying Temperature Gradient (NEMD Run) ---
+# Integration for the bulk atoms
+fix          NVE middle_atoms nve
+
+# Apply the fixed temperatures using Langevin thermostats
+# This drives the heat flux (J)
+fix          Hot_T  hot_group  langevin 305.0 305.0 0.1 8976 # Target T_hot = 305 K
+fix          Cold_T cold_group langevin 300.0 300.0 0.1 2345 # Target T_cold = 300 K
+
+# Critical for Flux calculation: Enable tracking of energy added/removed by the fixes
+fix_modify Hot_T energy yes
+ERROR: Illegal fix_modify command (src/fix.cpp:149)
+Last command: fix_modify Hot_T energy yes

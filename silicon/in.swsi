@@ -1,0 +1,95 @@
+# -----------------------------------------------------------------------------
+# LAMMPS Input File: Si Interfacial Thermal Conductance (ITC)
+# Method: Direct NEMD via Temperature Gradient (Langevin Thermostats)
+# Interface: Sigma 5 Twist Grain Boundary
+# -----------------------------------------------------------------------------
+
+## 1. Initialization
+units        metal              # eV, Angstrom, ps, bar
+dimension    3
+boundary     p p p              # Periodic in all directions
+atom_style   atomic
+
+# --- 2. Structure Generation (<100> Orientation) ---
+lattice      diamond 5.431      # Si Lattice Parameter
+region       box block 0 10 0 10 0 80 # Elongated in Z for heat flow (Lx=10, Ly=10, Lz=80)
+create_box   1 box
+create_atoms 1 box
+mass         1 28.0855
+
+# --- CREATE INTERFACE (Sigma 5 Twist Grain Boundary) ---
+# Creates a grain boundary by rotating the right half of the crystal
+region           right_half block INF INF INF INF 40 INF
+group            right_atoms region right_half
+#displace_atoms   right_atoms rotate 5 5 40 0 0 1 36.87 # Twist around Z-axis (36.87 deg for Sigma 5)
+displace_atoms   right_atoms rotate 5 5 40 0 0 1 0 # bulk thermal conductance
+
+# --- INSERT FOR VISUALIZATION ---
+write_data initial_structure.lammpsdata
+# --------------------------------
+
+## 3. Potential Definition
+pair_style   sw
+pair_coeff   * * Si.sw Si       # Requires Si.sw file
+
+# --- 4. Minimization (Structural Relaxation Phase 1) ---
+print "Starting Energy Minimization..."
+minimize     1.0e-6 1.0e-8 1000 10000
+reset_timestep 0
+
+# --- 5. Equilibration (Structural Relaxation Phase 2) ---
+timestep     0.001              # 1 fs step
+velocity     all create 300.0 12345 mom yes rot yes dist gaussian
+
+# NPT to allow stress relaxation and volume/pressure stabilization at 300K
+print "Starting NPT Equilibration at 300K..."
+fix          1 all npt temp 300.0 300.0 0.1 iso 0.0 0.0 1.0
+run          20000              # 20 ps equilibration
+unfix        1
+
+# --- 6. NEMD Setup (Defining Hot/Cold Regions) ---
+
+# Interface is at Z=40. Hot/Cold regions are placed away from the interface.
+# Regions are 2 Angstrom thick.
+region       hot_region  block INF INF INF INF 18 20
+region       cold_region block INF INF INF INF 58 60
+
+group        hot_group   region hot_region
+group        cold_group  region cold_region
+group        middle_atoms subtract all hot_group cold_group # The bulk and interface atoms
+
+# --- 7. Applying Temperature Gradient (NEMD Run) ---
+# Integration for the bulk atoms
+fix          NVE middle_atoms nve
+
+# Apply the fixed temperatures using Langevin thermostats
+# This drives the heat flux (J)
+fix          Hot_T  hot_group  langevin 305.0 305.0 0.1 8976 # Target T_hot = 305 K
+fix          Cold_T cold_group langevin 300.0 300.0 0.1 2345 # Target T_cold = 300 K
+
+# Critical for Flux calculation: Enable tracking of energy added/removed by the fixes
+fix_modify Hot_T energy yes
+fix_modify Cold_T energy yes
+
+# Track the cumulative energy added/removed by the fixes
+variable     E_hot_cum equal f_Hot_T # Cumulative energy added by hot bath
+variable     E_cold_cum equal f_Cold_T # Cumulative energy removed by cold bath
+
+# --- 8. Measurement and Output ---
+
+# Compute instantaneous temperature for spatial binning
+compute      ke all ke/atom
+variable     temp atom c_ke/(1.5*8.617e-5) # kT to T conversion (kB in eV/K)
+
+# Bin the system along Z (e.g., 1 Angstrom chunks)
+compute      layers all chunk/atom bin/1d z 1.0 units box
+fix          profile all ave/chunk 10 10000 100000 layers v_temp file temp_profile.dat
+
+# Output thermodynamic data and the cumulative energies for flux calculation
+thermo_style custom step temp etotal press v_E_hot_cum v_E_cold_cum
+thermo       10000 # Output every 10 ps
+
+print "Starting NEMD Run for Thermal Conductance..."
+run          200000 # 200 ps sampling
+
+print "NEMD Simulation Complete. Analyze temp_profile.dat and log.lammps."

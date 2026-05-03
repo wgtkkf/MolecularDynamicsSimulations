@@ -1,0 +1,212 @@
+LAMMPS (29 Sep 2021 - Update 2)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:98)
+  using 1 OpenMP thread(s) per MPI task
+# -----------------------------------------------------------------------------
+# LAMMPS Input File: Thermal Conductance Across a Vacuum Gap
+# -----------------------------------------------------------------------------
+
+# --- 1. USER INPUT VARIABLES ---
+variable        G_SIZE equal 5.0
+variable        T_HOT equal 305.0
+variable        T_COLD equal 300.0
+variable        MAT_SETUP string "Si_Si"
+variable        POT_FILE string "Si.sw"
+
+# --- 2. Initialization ---
+units           metal
+dimension       3
+boundary        p p p
+atom_style      atomic
+
+# --- 3. Material Logic ---
+if "${MAT_SETUP} == Si_Si" then   "variable LATTICE_TYPE string diamond"   "variable LATTICE_CONST equal 5.431"   "variable M1 equal 28.0855"   "variable M2 equal 28.0855"
+variable LATTICE_TYPE string diamond
+variable LATTICE_CONST equal 5.431
+variable M1 equal 28.0855
+variable M2 equal 28.0855
+if "${MAT_SETUP} == Au_Au" then   "variable LATTICE_TYPE string fcc"   "variable LATTICE_CONST equal 4.08"   "variable M1 equal 196.9665"   "variable M2 equal 196.9665"
+if "${MAT_SETUP} == Si_Pt" then   "variable LATTICE_TYPE string fcc"   "variable LATTICE_CONST equal 4.5"   "variable M1 equal 28.0855"   "variable M2 equal 195.084"
+
+# --- 4. Structure Generation ---
+lattice         ${LATTICE_TYPE} ${LATTICE_CONST}
+lattice         diamond ${LATTICE_CONST}
+lattice         diamond 5.431
+Lattice spacing in x,y,z = 5.4310000 5.4310000 5.4310000
+
+variable        z2_start equal 40.0+(${G_SIZE}/${LATTICE_CONST})
+variable        z2_start equal 40.0+(5/${LATTICE_CONST})
+variable        z2_start equal 40.0+(5/5.431)
+variable        z2_end   equal ${z2_start}+40.0
+variable        z2_end   equal 40.9206407659731+40.0
+variable        z_total  equal ${z2_end}
+variable        z_total  equal 80.9206407659731
+
+region          sim_box block 0 10 0 10 0 ${z_total}
+region          sim_box block 0 10 0 10 0 80.9206407659731
+create_box      2 sim_box
+Created orthogonal box = (0.0000000 0.0000000 0.0000000) to (54.310000 54.310000 439.48000)
+  1 by 1 by 10 MPI processor grid
+
+region          reg_left  block 0 10 0 10 0 40.0
+region          reg_right block 0 10 0 10 ${z2_start} ${z2_end}
+region          reg_right block 0 10 0 10 40.9206407659731 ${z2_end}
+region          reg_right block 0 10 0 10 40.9206407659731 80.9206407659731
+
+create_atoms    1 region reg_left
+Created 32200 atoms
+  using lattice units in orthogonal box = (0.0000000 0.0000000 0.0000000) to (54.310000 54.310000 439.48000)
+  create_atoms CPU = 0.001 seconds
+create_atoms    2 region reg_right
+Created 32000 atoms
+  using lattice units in orthogonal box = (0.0000000 0.0000000 0.0000000) to (54.310000 54.310000 439.48000)
+  create_atoms CPU = 0.001 seconds
+
+mass            1 ${M1}
+mass            1 28.0855
+mass            2 ${M2}
+mass            2 28.0855
+
+group           left_block  type 1
+32200 atoms in group left_block
+group           right_block type 2
+32000 atoms in group right_block
+group           all_atoms   union left_block right_block
+64200 atoms in group all_atoms
+
+variable        Lz_solid equal 40.0*${LATTICE_CONST}
+variable        Lz_solid equal 40.0*5.431
+variable        Lz_final equal ${z_total}*${LATTICE_CONST}
+variable        Lz_final equal 80.9206407659731*${LATTICE_CONST}
+variable        Lz_final equal 80.9206407659731*5.431
+
+# --- 5. Potential Definition ---
+if "${LATTICE_TYPE} == diamond" then   "pair_style sw"   "pair_coeff * * ${POT_FILE} Si Si"
+pair_style sw
+pair_coeff * * ${POT_FILE} Si Si
+pair_coeff * * Si.sw Si Si
+Reading sw potential file Si.sw with DATE: 2007-06-11
+if "${MAT_SETUP} == Au_Au" then   "pair_style eam/alloy"   "pair_coeff * * ${POT_FILE} Au Au"
+if "${MAT_SETUP} == Si_Pt" then   "pair_style eam/alloy"   "pair_coeff * * ${POT_FILE} Si Pt"
+
+# --- 6. Energy Minimization (CRITICAL STEP) ---
+print "Starting Energy Minimization..."
+Starting Energy Minimization...
+minimize        1.0e-6 1.0e-8 1000 10000
+WARNING: Using 'neigh_modify every 1 delay 0 check yes' setting during minimization (src/min.cpp:188)
+Neighbor list info ...
+  update every 1 steps, delay 0 steps, check yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 5.77118
+  ghost atom cutoff = 5.77118
+  binsize = 2.88559, bins = 19 19 153
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair sw, perpetual
+      attributes: full, newton on
+      pair build: full/bin/atomonly
+      stencil: full/bin/3d
+      bin: standard
+Per MPI rank memory allocation (min/avg/max) = 5.211 | 5.248 | 5.261 Mbytes
+Step Temp E_pair E_mol TotEng Press 
+       0            0    -277334.3            0    -277334.3    1118.7119 
+      19            0   -277537.52            0   -277537.52    974.14083 
+Loop time of 0.145424 on 10 procs for 19 steps with 64200 atoms
+
+100.0% CPU use with 10 MPI tasks x 1 OpenMP threads
+
+Minimization stats:
+  Stopping criterion = energy tolerance
+  Energy initial, next-to-last, final = 
+     -277334.304108871   -277537.24876416   -277537.52232739
+  Force two-norm initial, final = 96.276547 2.2222524
+  Force max component initial, final = 4.8129870 0.066100746
+  Final line search alpha, max atom move = 0.74100081 0.048980706
+  Iterations, force evaluations = 19 37
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.069553   | 0.087322   | 0.13748    |   8.0 | 60.05
+Neigh   | 0          | 0          | 0          |   0.0 |  0.00
+Comm    | 0.0014409  | 0.029888   | 0.07049    |  16.7 | 20.55
+Output  | 0          | 0          | 0          |   0.0 |  0.00
+Modify  | 0          | 0          | 0          |   0.0 |  0.00
+Other   |            | 0.02821    |            |       | 19.40
+
+Nlocal:        6420.00 ave        6600 max        6200 min
+Histogram: 2 0 0 0 0 5 0 0 0 3
+Nghost:        5683.80 ave        5923 max        5234 min
+Histogram: 2 0 0 0 0 1 2 1 0 4
+Neighs:         0.00000 ave           0 max           0 min
+Histogram: 10 0 0 0 0 0 0 0 0 0
+FullNghs:      217840.0 ave      226800 max      206200 min
+Histogram: 2 0 0 0 0 4 1 0 2 1
+
+Total # of neighbors = 2178400
+Ave neighs/atom = 33.931464
+Neighbor list builds = 0
+Dangerous builds = 0
+reset_timestep  0
+
+write_data initial_structure.lammpsdata
+System init for write_data ...
+
+# --- 7. NEMD Setup ---
+variable        t_thick equal 2.0*${LATTICE_CONST}
+variable        t_thick equal 2.0*5.431
+variable        z_hot_start equal ${Lz_final}-${t_thick}
+variable        z_hot_start equal 439.48-${t_thick}
+variable        z_hot_start equal 439.48-10.862
+variable        z_cold_end  equal ${t_thick}
+variable        z_cold_end  equal 10.862
+
+region          hot_thermo_region block INF INF INF INF ${z_hot_start} ${Lz_final} units box
+region          hot_thermo_region block INF INF INF INF 428.618 ${Lz_final} units box
+region          hot_thermo_region block INF INF INF INF 428.618 439.48 units box
+group           hot_thermo_group region hot_thermo_region
+1600 atoms in group hot_thermo_group
+region          cold_thermo_region block INF INF INF INF 0.0 ${z_cold_end} units box
+region          cold_thermo_region block INF INF INF INF 0.0 10.862 units box
+group           cold_thermo_group region cold_thermo_region
+1600 atoms in group cold_thermo_group
+group           bulk_atoms subtract all_atoms hot_thermo_group cold_thermo_group
+61000 atoms in group bulk_atoms
+
+# --- 8. Relaxation (Equilibration) ---
+print "Starting Relaxation at 300K..."
+Starting Relaxation at 300K...
+timestep        0.001
+velocity        all_atoms create 300.0 45678 mom yes rot yes dist gaussian
+fix             1 all_atoms nvt temp 300.0 300.0 0.1
+run             20000
+Per MPI rank memory allocation (min/avg/max) = 4.086 | 4.123 | 4.136 Mbytes
+Step Temp E_pair E_mol TotEng Press 
+       0          300   -277537.52            0   -275048.01    3025.4661 
+   20000    299.25579   -275683.54            0   -273200.21   -3210.6007 
+Loop time of 240.619 on 10 procs for 20000 steps with 64200 atoms
+
+Performance: 7.181 ns/day, 3.342 hours/ns, 83.119 timesteps/s
+99.8% CPU use with 10 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 111.72     | 133.53     | 213.73     | 269.9 | 55.50
+Neigh   | 0.7166     | 0.80732    | 1.0911     |  12.6 |  0.34
+Comm    | 15.751     | 68.428     | 117.1      | 435.0 | 28.44
+Output  | 5.8693e-05 | 6.2902e-05 | 7.5785e-05 |   0.0 |  0.00
+Modify  | 3.8315     | 36.707     | 103.46     | 543.0 | 15.26
+Other   |            | 1.141      |            |       |  0.47
+
+Nlocal:        6420.00 ave        6599 max        6200 min
+Histogram: 1 0 0 0 1 5 1 0 1 1
+Nghost:        5760.60 ave        5916 max        5573 min
+Histogram: 1 1 1 0 1 2 0 1 1 2
+Neighs:         0.00000 ave           0 max           0 min
+Histogram: 10 0 0 0 0 0 0 0 0 0
+FullNghs:      220265.0 ave      226495 max      212086 min
+Histogram: 1 0 0 0 1 5 0 1 1 1
+
+Total # of neighbors = 2202650
+Ave neighs/atom = 34.309190
+Neighbor list builds = 83
+Dangerous builds = 0
