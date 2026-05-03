@@ -1,2 +1,2 @@
-# ------------------------ About This Repository ----------------------------
+# -- About This Repository --
 LAMMPS inputs, in progress
