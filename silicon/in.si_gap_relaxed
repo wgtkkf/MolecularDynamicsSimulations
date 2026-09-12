@@ -1,0 +1,195 @@
+# =====================================================================
+#  Si(001) / vacuum gap / Si(001) interfacial conductance
+#  WITH a proper surface-relaxation stage before the NEMD run.
+#
+#  Workflow:
+#    stage 1  build both slabs FAR apart (beyond any cutoff)
+#    stage 2  anneal + quench the two free surfaces  -> reconstruction
+#    stage 3  measure the RELAXED surface positions
+#    stage 4  set the target gap d from those positions
+#    stage 5  equilibrate at 302.5 K
+#    stage 6  NEMD, 305 / 300 K
+#
+#  Intra-slab : SW (two independent instances, no bond crosses the gap)
+#  Cross-gap  : dispersion pair style (LJ here; swap for your own)
+# =====================================================================
+
+units           metal
+atom_style      atomic
+boundary        p p f
+atom_modify     map array
+
+# ------------------------------------------------------------ geometry
+variable a       equal 5.431
+variable nx      equal 6
+variable ny      equal 6
+variable nz      equal 24
+
+variable dtarget equal 4.30        # <<< target RELAXED surface separation [Ang]
+variable dbuild  equal 25.0        # build-time separation, > every cutoff
+
+variable Lx      equal v_nx*v_a
+variable Ly      equal v_ny*v_a
+variable Ls      equal v_nz*v_a
+variable ztop    equal 2*v_Ls+v_dbuild+20.0
+
+lattice         diamond ${a}
+region          box block 0 ${Lx} 0 ${Ly} -8.0 ${ztop} units box
+create_box      2 box
+
+region          rall block INF INF INF INF 0.0 $(2*v_Ls-0.01) units box
+create_atoms    1 region rall
+
+region          rup block INF INF INF INF $(v_Ls-0.01) INF units box
+group           upper region rup
+group           lower subtract all upper
+set             group upper type 2
+
+# pull slab B far away so the two surfaces relax independently
+variable shift0 equal v_dbuild-0.25*v_a
+displace_atoms  upper move 0.0 0.0 ${shift0} units box
+
+mass            1 28.0855
+mass            2 28.0855
+
+# ----------------------------------------------------------- potential
+# NOTE on the choice of potential for the SLABS:
+#   SW is cheap and stable but reproduces Si(001) surfaces poorly -- it
+#   does not give a clean 2x1 dimer row.  If the reconstruction matters
+#   quantitatively (it does here, because the outermost 2-3 layers carry
+#   the whole cross-gap coupling), switch to Tersoff, EDIP, MEAM, or a
+#   machine-learned Si potential.  Tersoff drop-in replacement:
+#     pair_style  hybrid/overlay tersoff tersoff lj/cut 15.0
+#     pair_coeff  * * tersoff 1 Si.tersoff Si NULL
+#     pair_coeff  * * tersoff 2 Si.tersoff NULL Si
+pair_style      hybrid/overlay sw sw lj/cut 15.0
+pair_coeff      * * sw 1 Si.sw Si NULL
+pair_coeff      * * sw 2 Si.sw NULL Si
+
+variable eps    equal 0.01743
+variable sig    equal 3.826
+pair_coeff      1 2 lj/cut ${eps} ${sig}
+
+neighbor        2.0 bin
+neigh_modify    delay 0 every 1 check yes
+
+# -------------------------------------------------------------- groups
+# walls are defined from the OUTER ends of each slab, so they are
+# unaffected by everything that happens at the two inner surfaces
+variable zwb    equal 2*v_a
+variable zwt    equal 2*v_Ls+v_shift0-2*v_a
+
+region          rwb block INF INF INF INF INF  ${zwb} units box
+region          rwt block INF INF INF INF ${zwt} INF  units box
+group           wallb region rwb
+group           wallt region rwt
+group           walls union wallb wallt
+group           mobile subtract all walls
+
+velocity        walls set 0.0 0.0 0.0
+fix             fwb wallb setforce 0.0 0.0 0.0
+fix             fwt wallt setforce 0.0 0.0 0.0
+
+thermo          2000
+thermo_style    custom step temp pe etotal
+
+# ============================================== STAGE 2: reconstruction
+# CG alone will NOT dimerize a symmetric 1x1 termination -- it is a
+# stationary point.  The anneal breaks the symmetry thermally; the slow
+# quench then lets the surface settle into its reconstructed minimum.
+timestep        0.0005
+
+min_style       cg
+minimize        1.0e-8 1.0e-10 20000 200000
+
+velocity        mobile create 300.0 8712341 mom yes rot no dist gaussian
+
+# heat well above room temperature but safely below the SW melting point
+fix             anl mobile nvt temp 300.0 1000.0 0.1
+run             100000                      # 50 ps  ramp up
+unfix           anl
+
+fix             anl mobile nvt temp 1000.0 1000.0 0.1
+run             200000                      # 100 ps hold: dimers form
+unfix           anl
+
+fix             anl mobile nvt temp 1000.0 300.0 0.1
+run             600000                      # 300 ps SLOW quench
+unfix           anl
+
+min_style       cg
+minimize        1.0e-8 1.0e-10 20000 200000
+
+write_data      relaxed_surfaces.data
+
+# ======================================= STAGE 3: measure relaxed gap
+compute         zA lower reduce max z       # top plane of slab A
+compute         zB upper reduce min z       # bottom plane of slab B
+run             0 post no
+
+variable        dnow equal c_zB-c_zA
+variable        dz   equal v_dtarget-v_dnow
+print           "relaxed separation after annealing = ${dnow} Ang"
+print           "moving slab B by ${dz} Ang to reach d = ${dtarget} Ang"
+
+# ============================================ STAGE 4: set target gap
+displace_atoms  upper move 0.0 0.0 ${dz} units box
+run             0 post no
+print           "actual separation now = $(c_zB-c_zA) Ang"
+
+# NOTE: reconstruction pulls the outermost plane in/out by a few tenths
+# of an Angstrom, so this measured d is the number to quote in your
+# G(d) curve -- NOT the nominal lattice-based value.
+
+# ========================================== STAGE 5: re-equilibrate
+# brief, gentle: enough to relax the newly created cross-gap contact
+# without undoing the reconstruction
+fix             eq mobile nvt temp 302.5 302.5 0.1
+run             300000                      # 150 ps
+unfix           eq
+reset_timestep  0
+
+# ================================================== STAGE 6: NEMD
+variable z1     equal 2*v_a
+variable z2     equal 6*v_a
+variable Ltot   equal 2*v_Ls+v_shift0+v_dz
+variable z3     equal v_Ltot-6*v_a
+variable z4     equal v_Ltot-2*v_a
+
+region          rhot block INF INF INF INF ${z1} ${z2} units box
+region          rcol block INF INF INF INF ${z3} ${z4} units box
+group           hot  region rhot
+group           cold region rcol
+
+fix             int  mobile nve
+fix             hotL hot  langevin 305.0 305.0 0.1 12345 tally yes
+fix             colL cold langevin 300.0 300.0 0.1 67890 tally yes
+
+thermo_style    custom step temp f_hotL f_colL
+run             1000000                     # 500 ps to steady state
+
+unfix           hotL
+unfix           colL
+reset_timestep  0
+fix             hotL hot  langevin 305.0 305.0 0.1 12345 tally yes
+fix             colL cold langevin 300.0 300.0 0.1 67890 tally yes
+
+variable        Eh equal f_hotL
+variable        Ec equal f_colL
+fix             eout all ave/time 1000 1 1000 v_Eh v_Ec &
+                file thermostat_energy.dat
+
+compute         cch mobile chunk/atom bin/1d z lower $(0.5*v_a) units box
+fix             tprof mobile ave/chunk 200 20000 4000000 cch temp &
+                file temp_profile.dat
+
+dump            d1 all custom 200000 dump.si id type x y z
+run             4000000                     # 2 ns production
+
+# ---------------------------------------------------------------------
+# Check the reconstruction actually happened before trusting anything:
+# visualize relaxed_surfaces.data in OVITO and look down [001] at the
+# outermost layer.  You want paired rows along <110>.  If the surface
+# is still a clean 1x1 square mesh, the anneal did not take -- raise the
+# hold temperature, lengthen the quench, or change potential.
+# ---------------------------------------------------------------------
